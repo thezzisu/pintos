@@ -11,8 +11,12 @@
 #include "threads/switch.h"
 #include "threads/synch.h"
 #include "threads/vaddr.h"
+#include "threads/malloc.h"
 #ifdef USERPROG
 #include "userprog/process.h"
+#include "userprog/syscall.h"
+#include "filesys/file.h"
+#include "filesys/filesys.h"
 #endif
 
 /** Random value for struct thread's `magic' member.
@@ -190,6 +194,23 @@ tid_t thread_create(const char *name, int priority,
   init_thread(t, name, priority);
   tid = t->tid = allocate_tid();
 
+  t->state = malloc(sizeof(struct thread_state));
+  memset(t->state, 0, sizeof(struct thread_state));
+  if (!t->state)
+  {
+    list_remove(&t->allelem);
+    palloc_free_page(t);
+    return TID_ERROR;
+  }
+  t->state->thread = t;
+  t->state->tid = tid;
+  t->state->exit_code = -1;
+  sema_init(&t->state->capture_ctl, 0);
+  lock_init(&t->state->lock);
+  lock_acquire(&thread_current()->child_states_lock);
+  list_push_back(&thread_current()->child_states, &t->state->elem);
+  lock_release(&thread_current()->child_states_lock);
+
   /* Stack frame for kernel_thread(). */
   kf = alloc_frame(t, sizeof *kf);
   kf->eip = NULL;
@@ -279,6 +300,51 @@ tid_t thread_tid(void)
   return thread_current()->tid;
 }
 
+static void thread_cleanup_files()
+{
+  struct thread *cur = thread_current();
+  lock_acquire(&cur->files_lock);
+  struct list_elem *e;
+  for (e = list_begin(&cur->files); e != list_end(&cur->files);)
+  {
+    struct thread_open_file *f = list_entry(e, struct thread_open_file, elem);
+    file_close(f->file);
+    e = list_remove(e);
+    free(f);
+  }
+  lock_release(&cur->files_lock);
+}
+
+static thread_cleanup_children()
+{
+  struct thread *cur = thread_current();
+  lock_acquire(&cur->child_states_lock);
+  struct list_elem *e;
+  for (e = list_begin(&cur->child_states); e != list_end(&cur->child_states);)
+  {
+    struct thread_state *s = list_entry(e, struct thread_state, elem);
+    e = list_remove(e);
+    lock_acquire(&s->lock);
+    if (s->thread)
+    {
+      lock_acquire(&initial_thread->child_states_lock);
+      s->thread->parent = initial_thread;
+      list_push_back(&initial_thread->child_states, &s->elem);
+      lock_release(&initial_thread->child_states_lock);
+      lock_release(&s->lock);
+    }
+    else
+    {
+      lock_release(&s->lock);
+      free(s);
+    }
+  }
+  lock_release(&cur->child_states_lock);
+  lock_acquire(&cur->state->lock);
+  cur->state->thread = NULL;
+  lock_release(&cur->state->lock);
+}
+
 /** Deschedules the current thread and destroys it.  Never
    returns to the caller. */
 void thread_exit(void)
@@ -293,8 +359,24 @@ void thread_exit(void)
      and schedule another process.  That process will destroy us
      when it calls thread_schedule_tail(). */
   intr_disable();
-  list_remove(&thread_current()->allelem);
-  thread_current()->status = THREAD_DYING;
+
+  struct thread *cur = thread_current();
+  if (cur->state->self_ok)
+  {
+    thread_cleanup_files();
+    thread_cleanup_children();
+    if (cur->exec_file)
+    {
+      lock_acquire(&filesys_lock);
+      file_close(cur->exec_file);
+      lock_release(&filesys_lock);
+    }
+    printf("%s: exit(%d)\n", thread_name(), cur->state->exit_code);
+  }
+  sema_up(&cur->state->capture_ctl);
+
+  list_remove(&cur->allelem);
+  cur->status = THREAD_DYING;
   schedule();
   NOT_REACHED();
 }
@@ -503,6 +585,20 @@ init_thread(struct thread *t, const char *name, int priority)
   t->stack = (uint8_t *)t + PGSIZE;
   t->priority = priority;
   t->magic = THREAD_MAGIC;
+  list_init(&t->child_states);
+  if (t == initial_thread)
+  {
+    t->parent = NULL;
+  }
+  else
+  {
+    t->parent = thread_current();
+  }
+  lock_init(&t->child_states_lock);
+  sema_init(&t->spawn_ctl, 0);
+  lock_init(&t->files_lock);
+  list_init(&t->files);
+  t->max_fd = 2;
 
   old_level = intr_disable();
   list_push_back(&all_list, &t->allelem);

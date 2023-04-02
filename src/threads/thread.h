@@ -4,6 +4,8 @@
 #include <debug.h>
 #include <list.h>
 #include <stdint.h>
+#include "threads/synch.h"
+#include "filesys/file.h"
 
 /** States in a thread's life cycle. */
 enum thread_status
@@ -23,6 +25,27 @@ typedef int tid_t;
 #define PRI_MIN 0      /**< Lowest priority. */
 #define PRI_DEFAULT 31 /**< Default priority. */
 #define PRI_MAX 63     /**< Highest priority. */
+
+struct thread_open_file
+{
+   int fd;
+   struct file *file;
+   struct list_elem elem;
+};
+
+struct thread;
+
+struct thread_state
+{
+   tid_t tid;
+   struct thread *thread;
+   int32_t exit_code;
+   struct list_elem elem;
+   bool captured; // is captured by process_wait
+   struct semaphore capture_ctl;
+   struct lock lock;
+   bool self_ok;
+};
 
 /** A kernel thread or user process.
 
@@ -98,6 +121,16 @@ struct thread
 #ifdef USERPROG
    /* Owned by userprog/process.c. */
    uint32_t *pagedir; /**< Page directory. */
+   struct thread_state *state;
+   struct lock child_states_lock;
+   struct list child_states;
+   struct thread *parent;
+   struct semaphore spawn_ctl;
+   bool spawn_ok;
+   struct lock files_lock;
+   struct list files;
+   int max_fd;
+   struct file *exec_file;
 #endif
 
    /* Owned by thread.c. */

@@ -17,6 +17,8 @@
 #include "threads/palloc.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
+#include "threads/synch.h"
+#include "userprog/syscall.h"
 
 static thread_func start_process NO_RETURN;
 static bool load(const char *cmdline, void (**eip)(void), void **esp);
@@ -27,7 +29,7 @@ static bool load(const char *cmdline, void (**eip)(void), void **esp);
    thread id, or TID_ERROR if the thread cannot be created. */
 tid_t process_execute(const char *file_name)
 {
-  char *fn_copy;
+  char *fn_copy, *fn_copy_1;
   tid_t tid;
 
   /* Make a copy of FILE_NAME.
@@ -35,12 +37,29 @@ tid_t process_execute(const char *file_name)
   fn_copy = palloc_get_page(0);
   if (fn_copy == NULL)
     return TID_ERROR;
+  fn_copy_1 = palloc_get_page(0);
+  if (fn_copy_1 == NULL)
+  {
+    palloc_free_page(fn_copy);
+    return TID_ERROR;
+  }
   strlcpy(fn_copy, file_name, PGSIZE);
+  strlcpy(fn_copy_1, file_name, PGSIZE);
+  char *save_ptr;
 
   /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create(file_name, PRI_DEFAULT, start_process, fn_copy);
+  tid = thread_create(strtok_r(fn_copy_1, " ", &save_ptr), PRI_DEFAULT, start_process, fn_copy);
+  palloc_free_page(fn_copy_1);
   if (tid == TID_ERROR)
+  {
     palloc_free_page(fn_copy);
+    return tid;
+  }
+  sema_down(&thread_current()->spawn_ctl);
+  if (!thread_current()->spawn_ok)
+  {
+    return TID_ERROR;
+  }
   return tid;
 }
 
@@ -51,7 +70,22 @@ start_process(void *file_name_)
 {
   char *file_name = file_name_;
   struct intr_frame if_;
-  bool success;
+  bool success = false;
+
+  const char **tokens = (const char **)palloc_get_page(0);
+  if (tokens == NULL)
+  {
+    printf("start_process: palloc_get_page failed\n");
+    goto start_process_done;
+  }
+  int token_count = 0;
+  char *save_ptr;
+  char *token;
+  for (token = strtok_r(file_name, " ", &save_ptr); token != NULL;
+       token = strtok_r(NULL, " ", &save_ptr))
+  {
+    tokens[token_count++] = token;
+  }
 
   /* Initialize interrupt frame and load executable. */
   memset(&if_, 0, sizeof if_);
@@ -59,9 +93,39 @@ start_process(void *file_name_)
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
   success = load(file_name, &if_.eip, &if_.esp);
+  if (success)
+  {
+    // Set up stack layout
+    for (int i = 0; i < token_count; i++)
+    {
+      int len = strlen(tokens[i]) + 1; // +1 for '\0'
+      if_.esp -= len;
+      memcpy(if_.esp, tokens[i], len);
+      tokens[i] = if_.esp;
+    }
+    if_.esp = (void *)ROUND_DOWN((uintptr_t)if_.esp, 4);
+    if_.esp -= 4;
+    *(uint32_t *)if_.esp = 0; // argv[argc] == NULL
+    for (int i = token_count - 1; i >= 0; i--)
+    {
+      if_.esp -= 4;
+      *(uint32_t *)if_.esp = tokens[i];
+    }
+    if_.esp -= 4;
+    *(uint32_t *)if_.esp = if_.esp + 4; // argv
+    if_.esp -= 4;
+    *(uint32_t *)if_.esp = token_count; // argc
+    if_.esp -= 4;
+    *(uint32_t *)if_.esp = 0; // return address
+  }
+  palloc_free_page(tokens);
 
+start_process_done:
   /* If load failed, quit. */
   palloc_free_page(file_name);
+  thread_current()->parent->spawn_ok = success;
+  thread_current()->state->self_ok = success;
+  sema_up(&thread_current()->parent->spawn_ctl);
   if (!success)
     thread_exit();
 
@@ -89,7 +153,34 @@ start_process(void *file_name_)
    does nothing. */
 int process_wait(tid_t child_tid UNUSED)
 {
-  return -1;
+  struct thread *cur = thread_current();
+  struct thread_state *child_state = NULL;
+  lock_acquire(&cur->child_states_lock);
+  for (struct list_elem *el = list_begin(&cur->child_states); el != list_end(&cur->child_states); el = list_next(el))
+  {
+    struct thread_state *state = list_entry(el, struct thread_state, elem);
+    if (state->tid == child_tid)
+    {
+      child_state = state;
+      break;
+    }
+  }
+  lock_release(&cur->child_states_lock);
+  if (child_state == NULL)
+  {
+    return -1;
+  }
+  bool captured;
+  lock_acquire(&child_state->lock);
+  captured = child_state->captured;
+  child_state->captured = true;
+  lock_release(&child_state->lock);
+  if (captured)
+  {
+    return -1;
+  }
+  sema_down(&child_state->capture_ctl);
+  return child_state->exit_code;
 }
 
 /** Free the current process's resources. */
@@ -211,6 +302,7 @@ bool load(const char *file_name, void (**eip)(void), void **esp)
   struct file *file = NULL;
   off_t file_ofs;
   bool success = false;
+  bool lock_acquired = false;
   int i;
 
   /* Allocate and activate page directory. */
@@ -220,12 +312,15 @@ bool load(const char *file_name, void (**eip)(void), void **esp)
   process_activate();
 
   /* Open executable file. */
+  lock_acquire(&filesys_lock);
+  lock_acquired = true;
   file = filesys_open(file_name);
   if (file == NULL)
   {
     printf("load: %s: open failed\n", file_name);
     goto done;
   }
+  file_deny_write(file);
 
   /* Read and verify executable header. */
   if (file_read(file, &ehdr, sizeof ehdr) != sizeof ehdr || memcmp(ehdr.e_ident, "\177ELF\1\1\1", 7) || ehdr.e_type != 2 || ehdr.e_machine != 3 || ehdr.e_version != 1 || ehdr.e_phentsize != sizeof(struct Elf32_Phdr) || ehdr.e_phnum > 1024)
@@ -303,7 +398,18 @@ bool load(const char *file_name, void (**eip)(void), void **esp)
 
 done:
   /* We arrive here whether the load is successful or not. */
-  file_close(file);
+  if (success)
+  {
+    thread_current()->exec_file = file;
+  }
+  else if (lock_acquired)
+  {
+    file_close(file);
+  }
+  if (lock_acquired)
+  {
+    lock_release(&filesys_lock);
+  }
   return success;
 }
 
