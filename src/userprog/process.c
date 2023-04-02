@@ -27,32 +27,37 @@ static bool load(const char *cmdline, void (**eip)(void), void **esp);
    FILENAME.  The new thread may be scheduled (and may even exit)
    before process_execute() returns.  Returns the new process's
    thread id, or TID_ERROR if the thread cannot be created. */
-tid_t process_execute(const char *file_name)
+tid_t process_execute(const char *cmdline)
 {
-  char *fn_copy, *fn_copy_1;
+  if (strlen(cmdline) > 255)
+  {
+    return TID_ERROR;
+  }
+
+  char *cmd_copy, *cmd_copy_1;
   tid_t tid;
 
   /* Make a copy of FILE_NAME.
      Otherwise there's a race between the caller and load(). */
-  fn_copy = palloc_get_page(0);
-  if (fn_copy == NULL)
+  cmd_copy = palloc_get_page(0);
+  if (cmd_copy == NULL)
     return TID_ERROR;
-  fn_copy_1 = palloc_get_page(0);
-  if (fn_copy_1 == NULL)
+  cmd_copy_1 = palloc_get_page(0);
+  if (cmd_copy_1 == NULL)
   {
-    palloc_free_page(fn_copy);
+    palloc_free_page(cmd_copy);
     return TID_ERROR;
   }
-  strlcpy(fn_copy, file_name, PGSIZE);
-  strlcpy(fn_copy_1, file_name, PGSIZE);
+  strlcpy(cmd_copy, cmdline, PGSIZE);
+  strlcpy(cmd_copy_1, cmdline, PGSIZE);
   char *save_ptr;
 
   /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create(strtok_r(fn_copy_1, " ", &save_ptr), PRI_DEFAULT, start_process, fn_copy);
-  palloc_free_page(fn_copy_1);
+  tid = thread_create(strtok_r(cmd_copy_1, " ", &save_ptr), PRI_DEFAULT, start_process, cmd_copy);
+  palloc_free_page(cmd_copy_1);
   if (tid == TID_ERROR)
   {
-    palloc_free_page(fn_copy);
+    palloc_free_page(cmd_copy);
     return tid;
   }
   sema_down(&thread_current()->spawn_ctl);
