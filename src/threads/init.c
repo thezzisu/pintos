@@ -31,6 +31,11 @@
 #else
 #include "tests/threads/tests.h"
 #endif
+#ifdef VM
+#include "vm/frame.h"
+#include "vm/page.h"
+#include "vm/swap.h"
+#endif
 #ifdef FILESYS
 #include "devices/block.h"
 #include "devices/ide.h"
@@ -97,6 +102,10 @@ int pintos_init(void)
   palloc_init(user_page_limit);
   malloc_init();
   paging_init();
+#ifdef VM
+  palloc_init_frame();
+  page_init();
+#endif
 
   /* Segmentation. */
 #ifdef USERPROG
@@ -124,6 +133,9 @@ int pintos_init(void)
   ide_init();
   locate_block_devices();
   filesys_init(format_filesys);
+#endif
+#ifdef VM
+  swap_init();
 #endif
 
   printf("Boot complete.\n");

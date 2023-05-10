@@ -19,6 +19,8 @@
 #include "threads/vaddr.h"
 #include "threads/synch.h"
 #include "userprog/syscall.h"
+#include "vm/frame.h"
+#include "vm/page.h"
 
 static thread_func start_process NO_RETURN;
 static bool load(const char *cmdline, void (**eip)(void), void **esp);
@@ -489,7 +491,7 @@ load_segment(struct file *file, off_t ofs, uint8_t *upage,
   ASSERT(pg_ofs(upage) == 0);
   ASSERT(ofs % PGSIZE == 0);
 
-  file_seek(file, ofs);
+  struct thread *t = thread_current();
   while (read_bytes > 0 || zero_bytes > 0)
   {
     /* Calculate how to fill this page.
@@ -499,29 +501,20 @@ load_segment(struct file *file, off_t ofs, uint8_t *upage,
     size_t page_zero_bytes = PGSIZE - page_read_bytes;
 
     /* Get a page of memory. */
-    uint8_t *kpage = palloc_get_page(PAL_USER);
-    if (kpage == NULL)
-      return false;
-
-    /* Load this page. */
-    if (file_read(file, kpage, page_read_bytes) != (int)page_read_bytes)
+    if (page_read_bytes)
     {
-      palloc_free_page(kpage);
-      return false;
+      page_map_file(t->pagedir, upage, file, ofs, page_read_bytes, writable);
     }
-    memset(kpage + page_read_bytes, 0, page_zero_bytes);
-
-    /* Add the page to the process's address space. */
-    if (!install_page(upage, kpage, writable))
+    else
     {
-      palloc_free_page(kpage);
-      return false;
+      page_map_zero(t->pagedir, upage, writable);
     }
 
     /* Advance. */
     read_bytes -= page_read_bytes;
     zero_bytes -= page_zero_bytes;
     upage += PGSIZE;
+    ofs += PGSIZE;
   }
   return true;
 }
@@ -534,7 +527,7 @@ setup_stack(void **esp)
   uint8_t *kpage;
   bool success = false;
 
-  kpage = palloc_get_page(PAL_USER | PAL_ZERO);
+  kpage = frame_alloc()->kpage;
   if (kpage != NULL)
   {
     success = install_page(((uint8_t *)PHYS_BASE) - PGSIZE, kpage, true);
@@ -559,6 +552,9 @@ static bool
 install_page(void *upage, void *kpage, bool writable)
 {
   struct thread *t = thread_current();
+  struct frame *frame = frame_of(kpage);
+  frame->upage = upage;
+  frame->pagedir = t->pagedir;
 
   /* Verify that there's not already a page at that virtual
      address, then map our page there. */

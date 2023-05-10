@@ -23,15 +23,28 @@ check_uaddr(const void *uaddr)
   thread_panic();
 }
 
-static void *
-map_kaddr(const void *uaddr)
+static void check_buffer(void *start, unsigned len)
 {
-  void *ptr = pagedir_get_page(thread_current()->pagedir, uaddr);
-  if (!ptr)
+  struct thread *cur = thread_current();
+  while (start)
   {
-    thread_panic();
+    check_uaddr(start);
+    uint8_t value = *(uint8_t *)start;
+    if (len > PGSIZE)
+    {
+      start += PGSIZE;
+      len -= PGSIZE;
+    }
+    else if (len == 0)
+    {
+      start = NULL;
+    }
+    else
+    {
+      start += len - 1;
+      len = 0;
+    }
   }
-  return ptr;
 }
 
 static int check_user_str(const char *uaddr)
@@ -40,7 +53,7 @@ static int check_user_str(const char *uaddr)
   for (const char *p = uaddr;; p++)
   {
     check_uaddr(p);
-    const char *q = map_kaddr(p);
+    const char *q = p;
     if (*q == '\0')
       break;
     len++;
@@ -63,7 +76,7 @@ static void fetch_args(struct intr_frame *f, int32_t *args, int n)
   {
     ptr = ((int32_t *)(f->esp)) + i + 1;
     check_uaddr(ptr);
-    args[i] = *(int *)map_kaddr(f->esp + sizeof(int32_t) * (i + 1));
+    args[i] = *ptr;
   }
 }
 
@@ -197,10 +210,7 @@ static void syscall_read(struct intr_frame *f UNUSED)
   int fd = args[0];
   void *buffer = (void *)args[1];
   unsigned size = (unsigned)args[2];
-  check_uaddr(buffer);
-  map_kaddr(buffer);
-  check_uaddr(buffer + size - 1);
-  map_kaddr(buffer + size - 1);
+  check_buffer(buffer, size);
   if (fd == 0)
   {
     for (unsigned i = 0; i < size; i++)
@@ -233,10 +243,7 @@ static void syscall_write(struct intr_frame *f UNUSED)
   int fd = args[0];
   const void *buffer = (const void *)args[1];
   unsigned size = (unsigned)args[2];
-  check_uaddr(buffer);
-  map_kaddr(buffer);
-  check_uaddr(buffer + size - 1);
-  map_kaddr(buffer + size - 1);
+  check_buffer(buffer, size);
   if (fd == 1)
   {
     putbuf(buffer, size);
@@ -340,7 +347,7 @@ static const int syscall_table_size = sizeof(syscall_table) / sizeof(syscall_tab
 static void
 syscall_handler(struct intr_frame *f UNUSED)
 {
-  int32_t syscall_no = *(int32_t *)map_kaddr(f->esp);
+  int32_t syscall_no = *(int32_t *)f->esp;
   if (syscall_no < 0 || syscall_no >= syscall_table_size)
   {
     // printf("invalid syscall number: %d\n", syscall_no);

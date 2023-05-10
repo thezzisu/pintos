@@ -10,6 +10,9 @@
 #include "threads/loader.h"
 #include "threads/synch.h"
 #include "threads/vaddr.h"
+#ifdef VM
+#include "vm/frame.h"
+#endif
 
 /** Page allocator.  Hands out memory in page-size (or
    page-multiple) chunks.  See malloc.h for an allocator that
@@ -59,6 +62,13 @@ void palloc_init(size_t user_page_limit)
   init_pool(&user_pool, free_start + kernel_pages * PGSIZE,
             user_pages, "user pool");
 }
+
+#ifdef VM
+void palloc_init_frame(void)
+{
+  frame_init(user_pool.base, bitmap_size(user_pool.used_map));
+}
+#endif
 
 /** Obtains and returns a group of PAGE_CNT contiguous free pages.
    If PAL_USER is set, the pages are obtained from the user pool,
