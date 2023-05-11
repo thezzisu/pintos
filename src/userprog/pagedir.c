@@ -5,6 +5,7 @@
 #include "threads/init.h"
 #include "threads/pte.h"
 #include "threads/palloc.h"
+#include "vm/page.h"
 
 static uint32_t *active_pd(void);
 static void invalidate_pagedir(uint32_t *);
@@ -39,10 +40,17 @@ void pagedir_destroy(uint32_t *pd)
       uint32_t *pte;
 
       for (pte = pt; pte < pt + PGSIZE / sizeof *pte; pte++)
+      {
+        void *vaddr = (void *)(((uint32_t)(pde - pd) << PDSHIFT) | ((uint32_t)(pte - pt) << PTSHIFT));
+        if (is_user_vaddr(vaddr))
+        {
+          page_destroy(pd, vaddr);
+        }
         if (*pte & PTE_P)
         {
           palloc_free_page(pte_get_page(*pte));
         }
+      }
       palloc_free_page(pt);
     }
   palloc_free_page(pd);
@@ -54,8 +62,8 @@ void pagedir_destroy(uint32_t *pd)
    on CREATE.  If CREATE is true, then a new page table is
    created and a pointer into it is returned.  Otherwise, a null
    pointer is returned. */
-static uint32_t *
-lookup_page(uint32_t *pd, const void *vaddr, bool create)
+uint32_t *
+pagedir_lookup_page(uint32_t *pd, const void *vaddr, bool create)
 {
   uint32_t *pt, *pde;
 
@@ -106,7 +114,7 @@ bool pagedir_set_page(uint32_t *pd, void *upage, void *kpage, bool writable)
   ASSERT(vtop(kpage) >> PTSHIFT < init_ram_pages);
   ASSERT(pd != init_page_dir);
 
-  pte = lookup_page(pd, upage, true);
+  pte = pagedir_lookup_page(pd, upage, true);
 
   if (pte != NULL)
   {
@@ -129,7 +137,7 @@ pagedir_get_page(uint32_t *pd, const void *uaddr)
 
   ASSERT(is_user_vaddr(uaddr));
 
-  pte = lookup_page(pd, uaddr, false);
+  pte = pagedir_lookup_page(pd, uaddr, false);
   if (pte != NULL && (*pte & PTE_P) != 0)
     return pte_get_page(*pte) + pg_ofs(uaddr);
   else
@@ -147,7 +155,7 @@ void pagedir_clear_page(uint32_t *pd, void *upage)
   ASSERT(pg_ofs(upage) == 0);
   ASSERT(is_user_vaddr(upage));
 
-  pte = lookup_page(pd, upage, false);
+  pte = pagedir_lookup_page(pd, upage, false);
   if (pte != NULL && (*pte & PTE_P) != 0)
   {
     *pte &= ~PTE_P;
@@ -161,7 +169,7 @@ void pagedir_clear_page(uint32_t *pd, void *upage)
    Returns false if PD contains no PTE for VPAGE. */
 bool pagedir_is_dirty(uint32_t *pd, const void *vpage)
 {
-  uint32_t *pte = lookup_page(pd, vpage, false);
+  uint32_t *pte = pagedir_lookup_page(pd, vpage, false);
   return pte != NULL && (*pte & PTE_D) != 0;
 }
 
@@ -169,7 +177,7 @@ bool pagedir_is_dirty(uint32_t *pd, const void *vpage)
    in PD. */
 void pagedir_set_dirty(uint32_t *pd, const void *vpage, bool dirty)
 {
-  uint32_t *pte = lookup_page(pd, vpage, false);
+  uint32_t *pte = pagedir_lookup_page(pd, vpage, false);
   if (pte != NULL)
   {
     if (dirty)
@@ -188,7 +196,7 @@ void pagedir_set_dirty(uint32_t *pd, const void *vpage, bool dirty)
    PD contains no PTE for VPAGE. */
 bool pagedir_is_accessed(uint32_t *pd, const void *vpage)
 {
-  uint32_t *pte = lookup_page(pd, vpage, false);
+  uint32_t *pte = pagedir_lookup_page(pd, vpage, false);
   return pte != NULL && (*pte & PTE_A) != 0;
 }
 
@@ -196,7 +204,7 @@ bool pagedir_is_accessed(uint32_t *pd, const void *vpage)
    VPAGE in PD. */
 void pagedir_set_accessed(uint32_t *pd, const void *vpage, bool accessed)
 {
-  uint32_t *pte = lookup_page(pd, vpage, false);
+  uint32_t *pte = pagedir_lookup_page(pd, vpage, false);
   if (pte != NULL)
   {
     if (accessed)

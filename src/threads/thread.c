@@ -12,6 +12,7 @@
 #include "threads/synch.h"
 #include "threads/vaddr.h"
 #include "threads/malloc.h"
+#include "devices/timer.h"
 #ifdef USERPROG
 #include "userprog/process.h"
 #include "userprog/syscall.h"
@@ -79,7 +80,7 @@ void thread_schedule_tail(struct thread *prev);
 static tid_t allocate_tid(void);
 
 /** Compares the priority of two threads. */
-static bool thread_compare_priority(const struct list_elem *a, const struct list_elem *b, void *aux)
+static bool thread_compare_priority(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED)
 {
   struct thread *thread_a = list_entry(a, struct thread, elem);
   struct thread *thread_b = list_entry(b, struct thread, elem);
@@ -300,7 +301,7 @@ tid_t thread_tid(void)
   return thread_current()->tid;
 }
 
-static void thread_cleanup_files()
+static void thread_cleanup_files(void)
 {
   struct thread *cur = thread_current();
   lock_acquire(&cur->files_lock);
@@ -315,7 +316,7 @@ static void thread_cleanup_files()
   lock_release(&cur->files_lock);
 }
 
-static thread_cleanup_children()
+static void thread_cleanup_children(void)
 {
   struct thread *cur = thread_current();
   lock_acquire(&cur->child_states_lock);

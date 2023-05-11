@@ -6,6 +6,7 @@
 
 uint32_t *pagedir_create(void);
 void pagedir_destroy(uint32_t *pd);
+uint32_t *pagedir_lookup_page(uint32_t *pd, const void *vaddr, bool create);
 bool pagedir_set_page(uint32_t *pd, void *upage, void *kpage, bool rw);
 void *pagedir_get_page(uint32_t *pd, const void *upage);
 void pagedir_clear_page(uint32_t *pd, void *upage);

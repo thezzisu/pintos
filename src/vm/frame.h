@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include "list.h"
 
 struct frame
 {
@@ -13,8 +14,7 @@ struct frame
 };
 
 void frame_init(void *, size_t);
-struct frame *frame_of(void *);
 struct frame *frame_alloc(void);
-void frame_free(struct frame *);
+void frame_free(void *kaddr);
 
 #endif

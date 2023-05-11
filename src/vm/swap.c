@@ -21,6 +21,13 @@ void swap_init(void)
   lock_init(&swap_lock);
 }
 
+void swap_free(swap_idx_t idx)
+{
+  lock_acquire(&swap_lock);
+  bitmap_flip(swap_bitmap, idx);
+  lock_release(&swap_lock);
+}
+
 void swap_in(swap_idx_t idx, void *kaddr)
 {
   size_t counter = 0;

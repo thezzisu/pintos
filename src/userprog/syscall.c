@@ -1,12 +1,16 @@
 #include "userprog/syscall.h"
 #include <stdio.h>
 #include <syscall-nr.h>
+#include "threads/malloc.h"
 #include "threads/interrupt.h"
 #include "threads/thread.h"
 #include "userprog/pagedir.h"
+#include "userprog/process.h"
 #include "threads/vaddr.h"
 #include "filesys/filesys.h"
 #include "filesys/file.h"
+#include "devices/shutdown.h"
+#include "devices/input.h"
 
 static void
 thread_panic(void)
@@ -23,13 +27,14 @@ check_uaddr(const void *uaddr)
   thread_panic();
 }
 
-static void check_buffer(void *start, unsigned len)
+static void check_buffer(const void *start, unsigned len, bool write)
 {
-  struct thread *cur = thread_current();
   while (start)
   {
     check_uaddr(start);
     uint8_t value = *(uint8_t *)start;
+    if (write)
+      *(uint8_t *)start = value;
     if (len > PGSIZE)
     {
       start += PGSIZE;
@@ -210,7 +215,7 @@ static void syscall_read(struct intr_frame *f UNUSED)
   int fd = args[0];
   void *buffer = (void *)args[1];
   unsigned size = (unsigned)args[2];
-  check_buffer(buffer, size);
+  check_buffer(buffer, size, true);
   if (fd == 0)
   {
     for (unsigned i = 0; i < size; i++)
@@ -243,7 +248,7 @@ static void syscall_write(struct intr_frame *f UNUSED)
   int fd = args[0];
   const void *buffer = (const void *)args[1];
   unsigned size = (unsigned)args[2];
-  check_buffer(buffer, size);
+  check_buffer(buffer, size, false);
   if (fd == 1)
   {
     putbuf(buffer, size);

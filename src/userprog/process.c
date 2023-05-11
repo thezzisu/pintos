@@ -116,10 +116,10 @@ start_process(void *file_name_)
     for (int i = token_count - 1; i >= 0; i--)
     {
       if_.esp -= 4;
-      *(uint32_t *)if_.esp = tokens[i];
+      *(uint32_t *)if_.esp = (uint32_t)tokens[i];
     }
     if_.esp -= 4;
-    *(uint32_t *)if_.esp = if_.esp + 4; // argv
+    *(uint32_t *)if_.esp = (uint32_t)if_.esp + 4; // argv
     if_.esp -= 4;
     *(uint32_t *)if_.esp = token_count; // argc
     if_.esp -= 4;
@@ -422,8 +422,6 @@ done:
 
 /** load() helpers. */
 
-static bool install_page(void *upage, void *kpage, bool writable);
-
 /** Checks whether PHDR describes a valid, loadable segment in
    FILE and returns true if so, false otherwise. */
 static bool
@@ -524,39 +522,8 @@ load_segment(struct file *file, off_t ofs, uint8_t *upage,
 static bool
 setup_stack(void **esp)
 {
-  uint8_t *kpage;
-  bool success = false;
-
-  kpage = frame_alloc()->kpage;
-  if (kpage != NULL)
-  {
-    success = install_page(((uint8_t *)PHYS_BASE) - PGSIZE, kpage, true);
-    if (success)
-      *esp = PHYS_BASE;
-    else
-      palloc_free_page(kpage);
-  }
-  return success;
-}
-
-/** Adds a mapping from user virtual address UPAGE to kernel
-   virtual address KPAGE to the page table.
-   If WRITABLE is true, the user process may modify the page;
-   otherwise, it is read-only.
-   UPAGE must not already be mapped.
-   KPAGE should probably be a page obtained from the user pool
-   with palloc_get_page().
-   Returns true on success, false if UPAGE is already mapped or
-   if memory allocation fails. */
-static bool
-install_page(void *upage, void *kpage, bool writable)
-{
   struct thread *t = thread_current();
-  struct frame *frame = frame_of(kpage);
-  frame->upage = upage;
-  frame->pagedir = t->pagedir;
-
-  /* Verify that there's not already a page at that virtual
-     address, then map our page there. */
-  return (pagedir_get_page(t->pagedir, upage) == NULL && pagedir_set_page(t->pagedir, upage, kpage, writable));
+  page_map_zero(t->pagedir, ((uint8_t *)PHYS_BASE) - PGSIZE, true);
+  *esp = PHYS_BASE;
+  return true;
 }

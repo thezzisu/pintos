@@ -154,6 +154,11 @@ page_fault(struct intr_frame *f)
    {
       page_swap_in(cur->pagedir, fault_addr);
    }
+   else if (!not_present && is_user_vaddr(fault_addr))
+   {
+      thread_current()->state->exit_code = -1;
+      thread_exit();
+   }
    else
    {
       printf("Page fault at %p: %s error %s page in %s context.\n",
