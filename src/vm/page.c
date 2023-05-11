@@ -68,6 +68,7 @@ void page_swap_in(uint32_t *pagedir, void *fault_addr)
     thread_current()->state->exit_code = -1;
     thread_exit();
   }
+  lock_acquire(&info->lock);
   struct frame *frame = frame_alloc();
   bool success = false;
   switch (info->state)
@@ -91,6 +92,7 @@ void page_swap_in(uint32_t *pagedir, void *fault_addr)
   info->state = PIS_ACTIVE;
   info->data.active.kpage = frame->kpage;
   success = success && pagedir_set_page(pagedir, info->upage, frame->kpage, info->writable);
+  lock_release(&info->lock);
   if (success)
   {
     frame->pagedir = pagedir;
@@ -111,11 +113,14 @@ void page_swap_out(uint32_t *pagedir, void *upage)
   }
   lock_acquire(&info->lock);
   if (info->state != PIS_ACTIVE)
+  {
+    lock_release(&info->lock);
     return;
-  swap_idx_t idx = swap_out(info->data.active.kpage);
-  info->state = PIS_SWAP;
-  info->data.swap.idx = idx;
+  }
   pagedir_clear_page(pagedir, info->upage);
+  info->state = PIS_SWAP;
+  swap_idx_t idx = swap_out(info->data.active.kpage);
+  info->data.swap.idx = idx;
   lock_release(&info->lock);
 }
 
