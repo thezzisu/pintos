@@ -9,8 +9,9 @@
 typedef uint32_t swap_idx_t;
 
 void swap_init(void);
-void swap_in(swap_idx_t idx, void *kaddr);
+swap_idx_t swap_alloc(void);
 void swap_free(swap_idx_t idx);
-swap_idx_t swap_out(void *kaddr);
+void swap_in(swap_idx_t idx, void *kaddr);
+void swap_out(swap_idx_t idx, void *kaddr);
 
 #endif

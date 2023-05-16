@@ -501,7 +501,7 @@ load_segment(struct file *file, off_t ofs, uint8_t *upage,
     /* Get a page of memory. */
     if (page_read_bytes)
     {
-      page_map_file(t->pagedir, upage, file, ofs, page_read_bytes, writable);
+      page_map_file(t->pagedir, upage, file, ofs, page_read_bytes, writable, false);
     }
     else
     {

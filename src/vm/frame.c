@@ -87,6 +87,7 @@ void frame_free(void *kaddr)
 {
   struct frame *frame = frame_of(kaddr);
   lock_acquire(&frames_lock);
+  palloc_free_page(frame->kpage);
   frame->pagedir = NULL;
   frame->upage = NULL;
   lock_release(&frames_lock);

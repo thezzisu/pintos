@@ -122,10 +122,11 @@ kill(struct intr_frame *f)
 static void
 page_fault(struct intr_frame *f)
 {
-   bool not_present; /**< True: not-present page, false: writing r/o page. */
-   bool write;       /**< True: access was write, false: access was read. */
-   bool user;        /**< True: access by user, false: access by kernel. */
-   void *fault_addr; /**< Fault address. */
+   bool not_present;  /**< True: not-present page, false: writing r/o page. */
+   bool write;        /**< True: access was write, false: access was read. */
+   bool user;         /**< True: access by user, false: access by kernel. */
+   bool stack_access; /**< True: access was to stack, false: not to stack. */
+   void *fault_addr;  /**< Fault address. */
    struct thread *cur = thread_current();
 
    /* Obtain faulting address, the virtual address that was
@@ -149,10 +150,11 @@ page_fault(struct intr_frame *f)
    not_present = (f->error_code & PF_P) == 0;
    write = (f->error_code & PF_W) != 0;
    user = (f->error_code & PF_U) != 0;
+   stack_access = (fault_addr >= f->esp - 32 && fault_addr < PHYS_BASE);
 
    if (not_present)
    {
-      page_swap_in(cur->pagedir, fault_addr);
+      page_swap_in(cur->pagedir, fault_addr, stack_access);
    }
    else if (!not_present && is_user_vaddr(fault_addr))
    {

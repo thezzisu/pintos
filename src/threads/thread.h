@@ -6,6 +6,8 @@
 #include <stdint.h>
 #include "threads/synch.h"
 #include "filesys/file.h"
+// 8MB stack limit
+#define MAX_STACK_PAGES (8 * 1024 / 4)
 
 /** States in a thread's life cycle. */
 enum thread_status
@@ -30,6 +32,14 @@ struct thread_open_file
 {
    int fd;
    struct file *file;
+   struct list_elem elem;
+};
+
+struct thread_mmap_record
+{
+   int mapid;
+   void *start;
+   void *end;
    struct list_elem elem;
 };
 
@@ -121,15 +131,18 @@ struct thread
 #ifdef USERPROG
    /* Owned by userprog/process.c. */
    uint32_t *pagedir; /**< Page directory. */
+   int user_stack_pages;
    struct thread_state *state;
    struct lock child_states_lock;
    struct list child_states;
    struct thread *parent;
    struct semaphore spawn_ctl;
    bool spawn_ok;
-   struct lock files_lock;
+   struct lock list_lock;
    struct list files;
    int max_fd;
+   struct list mmap_records;
+   int next_mapid;
    struct file *exec_file;
 #endif
 

@@ -195,6 +195,7 @@ tid_t thread_create(const char *name, int priority,
   init_thread(t, name, priority);
   tid = t->tid = allocate_tid();
 
+  t->user_stack_pages = 0;
   t->state = malloc(sizeof(struct thread_state));
   memset(t->state, 0, sizeof(struct thread_state));
   if (!t->state)
@@ -304,7 +305,7 @@ tid_t thread_tid(void)
 static void thread_cleanup_files(void)
 {
   struct thread *cur = thread_current();
-  lock_acquire(&cur->files_lock);
+  lock_acquire(&cur->list_lock);
   struct list_elem *e;
   for (e = list_begin(&cur->files); e != list_end(&cur->files);)
   {
@@ -313,7 +314,7 @@ static void thread_cleanup_files(void)
     e = list_remove(e);
     free(f);
   }
-  lock_release(&cur->files_lock);
+  lock_release(&cur->list_lock);
 }
 
 static void thread_cleanup_children(void)
@@ -597,9 +598,11 @@ init_thread(struct thread *t, const char *name, int priority)
   }
   lock_init(&t->child_states_lock);
   sema_init(&t->spawn_ctl, 0);
-  lock_init(&t->files_lock);
+  lock_init(&t->list_lock);
   list_init(&t->files);
   t->max_fd = 2;
+  list_init(&t->mmap_records);
+  t->next_mapid = 1;
 
   old_level = intr_disable();
   list_push_back(&all_list, &t->allelem);

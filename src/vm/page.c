@@ -7,6 +7,7 @@
 #include "userprog/pagedir.h"
 #include "threads/thread.h"
 #include "threads/malloc.h"
+#include "lib/stdio.h"
 
 static unsigned page_info_hash(const struct hash_elem *p_, void *aux UNUSED)
 {
@@ -43,6 +44,18 @@ static bool load_file_into(struct file *file, off_t ofs, uint32_t read_bytes, vo
   return true;
 }
 
+static bool dump_mem_into(struct file *file, off_t ofs, uint32_t write_bytes, void *kpage)
+{
+  file_seek(file, ofs);
+  off_t off = file_write(file, kpage, write_bytes);
+  if (off != (int)write_bytes)
+  {
+    printf("Write failed for %p %d %d %d\n", kpage, ofs, off, write_bytes);
+    return false;
+  }
+  return true;
+}
+
 static struct page_info *get_page_info(uint32_t *pagedir, void *fault_addr)
 {
   struct page_info p;
@@ -60,37 +73,61 @@ static struct page_info *get_page_info(uint32_t *pagedir, void *fault_addr)
   return info;
 }
 
-void page_swap_in(uint32_t *pagedir, void *fault_addr)
+bool page_exists(uint32_t *pagedir, void *fault_addr)
+{
+  return get_page_info(pagedir, fault_addr) != NULL;
+}
+
+void page_swap_in(uint32_t *pagedir, void *fault_addr, bool allow_map)
 {
   struct page_info *info = get_page_info(pagedir, fault_addr);
   if (!info)
   {
-    thread_current()->state->exit_code = -1;
-    thread_exit();
+    struct thread *cur = thread_current();
+    if (!allow_map)
+    {
+      cur->state->exit_code = -1;
+      thread_exit();
+    }
+    if (++cur->user_stack_pages > MAX_STACK_PAGES)
+    {
+      cur->state->exit_code = -1;
+      thread_exit();
+    }
+    void *base = pg_round_down(fault_addr);
+    page_map_zero(pagedir, base, true);
+    info = get_page_info(pagedir, fault_addr);
   }
   lock_acquire(&info->lock);
+  if (info->state != PIS_SWAP)
+  {
+    PANIC("Attempted to swap in non-swap page");
+  }
   struct frame *frame = frame_alloc();
   bool success = false;
-  switch (info->state)
+  switch (info->backend_type)
   {
-  case PIS_ACTIVE:
-    PANIC("Page is active");
-    break;
-  case PIS_SWAP:
-    swap_in(info->data.swap.idx, frame->kpage);
+  case PB_NONE:
+    PANIC("Attempted to swap in page with no backend");
+  case PB_SWAP:
+    swap_in(info->backend.swap.idx, frame->kpage);
     success = true;
     break;
-  case PIS_ZERO:
+  case PB_ZERO:
     memset(frame->kpage, 0, PGSIZE);
     success = true;
     break;
-  case PIS_FILE:
-    success = load_file_into(info->data.file.file, info->data.file.ofs, info->data.file.read_bytes, frame->kpage);
-    file_close(info->data.file.file);
+  case PB_FILE:
+    success = load_file_into(info->backend.file.file, info->backend.file.ofs, info->backend.file.size, frame->kpage);
+    if (!info->backend.file.write_back)
+    {
+      file_close(info->backend.file.file);
+      info->backend_type = PB_NONE;
+    }
     break;
   }
   info->state = PIS_ACTIVE;
-  info->data.active.kpage = frame->kpage;
+  info->kpage = frame->kpage;
   success = success && pagedir_set_page(pagedir, info->upage, frame->kpage, info->writable);
   lock_release(&info->lock);
   if (success)
@@ -117,23 +154,48 @@ void page_swap_out(uint32_t *pagedir, void *upage)
     lock_release(&info->lock);
     return;
   }
+  bool dirty = pagedir_is_dirty(pagedir, info->upage);
   pagedir_clear_page(pagedir, info->upage);
   info->state = PIS_SWAP;
-  swap_idx_t idx = swap_out(info->data.active.kpage);
-  info->data.swap.idx = idx;
+  switch (info->backend_type)
+  {
+  case PB_SWAP:
+    if (dirty)
+    {
+      swap_out(info->backend.swap.idx, info->kpage);
+    }
+    break;
+  case PB_ZERO:
+  case PB_NONE:
+    info->backend_type = PB_SWAP;
+    info->backend.swap.idx = swap_alloc();
+    swap_out(info->backend.swap.idx, info->kpage);
+    break;
+  case PB_FILE:
+    if (dirty)
+    {
+      if (!dump_mem_into(info->backend.file.file, info->backend.file.ofs, info->backend.file.size, info->kpage))
+      {
+        PANIC("Failed to dump memory into file");
+      }
+    }
+    break;
+  }
   lock_release(&info->lock);
 }
 
-void page_map_file(uint32_t *pagedir, void *upage, struct file *file, off_t ofs, size_t read_bytes, bool writable)
+void page_map_file(uint32_t *pagedir, void *upage, struct file *file, off_t ofs, size_t read_bytes, bool writable, bool write_back)
 {
   struct page_info *info = malloc(sizeof(struct page_info));
   info->pagedir = pagedir;
   info->upage = upage;
   info->writable = writable;
-  info->state = PIS_FILE;
-  info->data.file.file = file_reopen(file);
-  info->data.file.ofs = ofs;
-  info->data.file.read_bytes = read_bytes;
+  info->state = PIS_SWAP;
+  info->backend_type = PB_FILE;
+  info->backend.file.file = file_reopen(file);
+  info->backend.file.ofs = ofs;
+  info->backend.file.size = read_bytes;
+  info->backend.file.write_back = write_back;
   lock_init(&info->lock);
   lock_acquire(&page_infos_lock);
   hash_insert(&page_infos, &info->hash_elem);
@@ -146,7 +208,8 @@ void page_map_zero(uint32_t *pagedir, void *upage, bool writable)
   info->pagedir = pagedir;
   info->upage = upage;
   info->writable = writable;
-  info->state = PIS_ZERO;
+  info->state = PIS_SWAP;
+  info->backend_type = PB_ZERO;
   lock_init(&info->lock);
   lock_acquire(&page_infos_lock);
   hash_insert(&page_infos, &info->hash_elem);
@@ -161,18 +224,19 @@ void page_destroy(uint32_t *pagedir, void *upage)
   lock_acquire(&info->lock);
   info->state = PIS_DIE;
   lock_release(&info->lock);
-  switch (info->state)
+  if (info->state == PIS_ACTIVE)
   {
-  case PIS_ACTIVE:
-    frame_free(info->data.active.kpage);
+    frame_free(info->kpage);
+  }
+  bool dirty = pagedir_is_dirty(pagedir, info->upage);
+  switch (info->backend_type)
+  {
+  case PB_FILE:
+    if (dirty && info->backend.file.write_back)
+      dump_mem_into(info->backend.file.file, info->backend.file.ofs, info->backend.file.size, info->kpage);
+    file_close(info->backend.file.file);
     break;
-  case PIS_SWAP:
-    swap_free(info->data.swap.idx);
-    break;
-  case PIS_ZERO:
-    break;
-  case PIS_FILE:
-    file_close(info->data.file.file);
+  default:
     break;
   }
   lock_acquire(&page_infos_lock);

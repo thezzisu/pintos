@@ -11,6 +11,7 @@
 #include "filesys/file.h"
 #include "devices/shutdown.h"
 #include "devices/input.h"
+#include "vm/page.h"
 
 static void
 thread_panic(void)
@@ -90,7 +91,7 @@ static void syscall_halt(struct intr_frame *f UNUSED)
   shutdown_power_off();
 }
 
-static void syscall_exit(struct intr_frame *f UNUSED)
+static void syscall_exit(struct intr_frame *f)
 {
   int32_t args[1];
   fetch_args(f, args, 1);
@@ -98,7 +99,7 @@ static void syscall_exit(struct intr_frame *f UNUSED)
   thread_exit();
 }
 
-static void syscall_exec(struct intr_frame *f UNUSED)
+static void syscall_exec(struct intr_frame *f)
 {
   int32_t args[1];
   fetch_args(f, args, 1);
@@ -107,7 +108,7 @@ static void syscall_exec(struct intr_frame *f UNUSED)
   f->eax = process_execute(cmd_line);
 }
 
-static void syscall_wait(struct intr_frame *f UNUSED)
+static void syscall_wait(struct intr_frame *f)
 {
   int32_t args[1];
   fetch_args(f, args, 1);
@@ -115,7 +116,7 @@ static void syscall_wait(struct intr_frame *f UNUSED)
   f->eax = process_wait(tid);
 }
 
-static void syscall_create(struct intr_frame *f UNUSED)
+static void syscall_create(struct intr_frame *f)
 {
   int32_t args[2];
   fetch_args(f, args, 2);
@@ -127,7 +128,7 @@ static void syscall_create(struct intr_frame *f UNUSED)
   lock_release(&filesys_lock);
 }
 
-static void syscall_remove(struct intr_frame *f UNUSED)
+static void syscall_remove(struct intr_frame *f)
 {
   int32_t args[1];
   fetch_args(f, args, 1);
@@ -138,7 +139,7 @@ static void syscall_remove(struct intr_frame *f UNUSED)
   lock_release(&filesys_lock);
 }
 
-static void syscall_open(struct intr_frame *f UNUSED)
+static void syscall_open(struct intr_frame *f)
 {
   int32_t args[1];
   fetch_args(f, args, 1);
@@ -163,16 +164,16 @@ static void syscall_open(struct intr_frame *f UNUSED)
   }
   struct thread *cur = thread_current();
   open_file->file = file_ptr;
-  lock_acquire(&cur->files_lock);
+  lock_acquire(&cur->list_lock);
   open_file->fd = ++cur->max_fd;
   list_push_back(&cur->files, &open_file->elem);
-  lock_release(&cur->files_lock);
+  lock_release(&cur->list_lock);
   f->eax = open_file->fd;
 }
 
 /**
  * Get the open file struct
- * Caller should hold files_lock
+ * Caller should hold list_lock
  */
 static struct thread_open_file *get_open_file(int fd)
 {
@@ -189,15 +190,15 @@ static struct thread_open_file *get_open_file(int fd)
   return NULL;
 }
 
-static void syscall_filesize(struct intr_frame *f UNUSED)
+static void syscall_filesize(struct intr_frame *f)
 {
   int32_t args[1];
   fetch_args(f, args, 1);
   int fd = args[0];
   struct thread *cur = thread_current();
-  lock_acquire(&cur->files_lock);
+  lock_acquire(&cur->list_lock);
   struct thread_open_file *open_file = get_open_file(fd);
-  lock_release(&cur->files_lock);
+  lock_release(&cur->list_lock);
   if (!open_file)
   {
     f->eax = -1;
@@ -208,7 +209,7 @@ static void syscall_filesize(struct intr_frame *f UNUSED)
   lock_release(&filesys_lock);
 }
 
-static void syscall_read(struct intr_frame *f UNUSED)
+static void syscall_read(struct intr_frame *f)
 {
   int32_t args[3];
   fetch_args(f, args, 3);
@@ -227,9 +228,9 @@ static void syscall_read(struct intr_frame *f UNUSED)
   else
   {
     struct thread *cur = thread_current();
-    lock_acquire(&cur->files_lock);
+    lock_acquire(&cur->list_lock);
     struct thread_open_file *open_file = get_open_file(fd);
-    lock_release(&cur->files_lock);
+    lock_release(&cur->list_lock);
     if (!open_file)
     {
       f->eax = -1;
@@ -241,7 +242,7 @@ static void syscall_read(struct intr_frame *f UNUSED)
   }
 }
 
-static void syscall_write(struct intr_frame *f UNUSED)
+static void syscall_write(struct intr_frame *f)
 {
   int32_t args[3];
   fetch_args(f, args, 3);
@@ -257,9 +258,9 @@ static void syscall_write(struct intr_frame *f UNUSED)
   else
   {
     struct thread *cur = thread_current();
-    lock_acquire(&cur->files_lock);
+    lock_acquire(&cur->list_lock);
     struct thread_open_file *open_file = get_open_file(fd);
-    lock_release(&cur->files_lock);
+    lock_release(&cur->list_lock);
     if (!open_file)
     {
       f->eax = -1;
@@ -271,16 +272,16 @@ static void syscall_write(struct intr_frame *f UNUSED)
   }
 }
 
-static void syscall_seek(struct intr_frame *f UNUSED)
+static void syscall_seek(struct intr_frame *f)
 {
   int32_t args[2];
   fetch_args(f, args, 2);
   int fd = args[0];
   unsigned position = (unsigned)args[1];
   struct thread *cur = thread_current();
-  lock_acquire(&cur->files_lock);
+  lock_acquire(&cur->list_lock);
   struct thread_open_file *open_file = get_open_file(fd);
-  lock_release(&cur->files_lock);
+  lock_release(&cur->list_lock);
   if (!open_file)
   {
     return;
@@ -290,15 +291,15 @@ static void syscall_seek(struct intr_frame *f UNUSED)
   lock_release(&filesys_lock);
 }
 
-static void syscall_tell(struct intr_frame *f UNUSED)
+static void syscall_tell(struct intr_frame *f)
 {
   int32_t args[1];
   fetch_args(f, args, 1);
   int fd = args[0];
   struct thread *cur = thread_current();
-  lock_acquire(&cur->files_lock);
+  lock_acquire(&cur->list_lock);
   struct thread_open_file *open_file = get_open_file(fd);
-  lock_release(&cur->files_lock);
+  lock_release(&cur->list_lock);
   if (!open_file)
   {
     f->eax = -1;
@@ -309,19 +310,19 @@ static void syscall_tell(struct intr_frame *f UNUSED)
   lock_release(&filesys_lock);
 }
 
-static void syscall_close(struct intr_frame *f UNUSED)
+static void syscall_close(struct intr_frame *f)
 {
   int32_t args[1];
   fetch_args(f, args, 1);
   int fd = args[0];
   struct thread *cur = thread_current();
-  lock_acquire(&cur->files_lock);
+  lock_acquire(&cur->list_lock);
   struct thread_open_file *open_file = get_open_file(fd);
   if (open_file)
   {
     list_remove(&open_file->elem);
   }
-  lock_release(&cur->files_lock);
+  lock_release(&cur->list_lock);
   if (open_file)
   {
     lock_acquire(&filesys_lock);
@@ -329,6 +330,107 @@ static void syscall_close(struct intr_frame *f UNUSED)
     lock_release(&filesys_lock);
     free(open_file);
   }
+}
+
+static void syscall_mmap(struct intr_frame *f)
+{
+  int32_t args[2];
+  fetch_args(f, args, 2);
+  int fd = args[0];
+  void *addr = (void *)args[1];
+  if (!addr || fd == 0 || fd == 1)
+  {
+    f->eax = -1;
+    return;
+  }
+  if (pg_ofs(addr) != 0 || addr == 0)
+  {
+    f->eax = -1;
+    return;
+  }
+  struct thread *cur = thread_current();
+  lock_acquire(&cur->list_lock);
+  struct thread_open_file *open_file = get_open_file(fd);
+  lock_release(&cur->list_lock);
+  if (!open_file)
+  {
+    f->eax = -1;
+    return;
+  }
+  off_t length = file_length(open_file->file);
+  if (!length)
+  {
+    f->eax = -1;
+    return;
+  }
+  for (void *map_base = addr; map_base < addr + length; map_base += PGSIZE)
+  {
+    if (page_exists(cur->pagedir, map_base))
+    {
+      f->eax = -1;
+      return;
+    }
+  }
+  struct thread_mmap_record *record = malloc(sizeof(struct thread_mmap_record));
+  if (!record)
+  {
+    f->eax = -1;
+    return;
+  }
+  record->mapid = cur->next_mapid++;
+  record->start = addr;
+  void *map_base;
+  for (map_base = addr; map_base < addr + length; map_base += PGSIZE)
+  {
+    page_map_file(cur->pagedir, map_base, open_file->file, map_base - addr, map_base + PGSIZE >= addr + length ? addr + length - map_base : PGSIZE, true, true);
+  }
+  record->end = map_base;
+  f->eax = record->mapid;
+  lock_acquire(&cur->list_lock);
+  list_push_back(&cur->mmap_records, &record->elem);
+  lock_release(&cur->list_lock);
+}
+
+/**
+ * Get the open file struct
+ * Caller should hold list_lock
+ */
+static struct thread_mmap_record *get_mmap_record(int mapid)
+{
+  struct thread *cur = thread_current();
+  struct list_elem *e;
+  for (e = list_begin(&cur->mmap_records); e != list_end(&cur->mmap_records); e = list_next(e))
+  {
+    struct thread_mmap_record *record = list_entry(e, struct thread_mmap_record, elem);
+    if (record->mapid == mapid)
+    {
+      return record;
+    }
+  }
+  return NULL;
+}
+
+static void syscall_munmap(struct intr_frame *f)
+{
+  int32_t args[1];
+  fetch_args(f, args, 1);
+  int mapid = args[0];
+  struct thread *cur = thread_current();
+  lock_acquire(&cur->list_lock);
+  struct thread_mmap_record *record = get_mmap_record(mapid);
+  lock_release(&cur->list_lock);
+  if (!record)
+  {
+    return;
+  }
+  for (void *map_base = record->start; map_base < record->end; map_base += PGSIZE)
+  {
+    page_destroy(cur->pagedir, map_base);
+  }
+  lock_acquire(&cur->list_lock);
+  list_remove(&record->elem);
+  lock_release(&cur->list_lock);
+  free(record);
 }
 
 // syscall table
@@ -346,11 +448,13 @@ static void (*syscall_table[])(struct intr_frame *) = {
     [SYS_SEEK] = syscall_seek,
     [SYS_TELL] = syscall_tell,
     [SYS_CLOSE] = syscall_close,
+    [SYS_MMAP] = syscall_mmap,
+    [SYS_MUNMAP] = syscall_munmap,
 };
 static const int syscall_table_size = sizeof(syscall_table) / sizeof(syscall_table[0]);
 
 static void
-syscall_handler(struct intr_frame *f UNUSED)
+syscall_handler(struct intr_frame *f)
 {
   int32_t syscall_no = *(int32_t *)f->esp;
   if (syscall_no < 0 || syscall_no >= syscall_table_size)
